@@ -77,6 +77,7 @@
 // G2  - CW ARC
 // G3  - CCW ARC
 // G4  - Dwell S<seconds> or P<milliseconds>
+// G5  - Cubic B-spline
 // G10 - retract filament according to settings of M207
 // G11 - retract recover filament according to settings of M208
 // G28 - Home one or more axes
@@ -331,7 +332,7 @@ const char echomagic[] PROGMEM = "echo:";
 const char axis_codes[NUM_AXIS] = {'X', 'Y', 'Z', 'E'};
 static float destination[NUM_AXIS] = { 0 };
 
-static float offset[3] = { 0 };
+static float offset[4] = { 0 };
 
 #ifndef DELTA
   static bool home_all_axis = true;
@@ -389,6 +390,7 @@ bool target_direction;
 //===========================================================================
 
 void get_arc_coordinates();
+void get_cubic_coordinates();
 bool setTargetedHotend(int code);
 
 void serial_echopair_P(const char *s_P, float v)
@@ -1707,6 +1709,16 @@ inline void gcode_G4() {
     manage_heater();
     manage_inactivity();
     lcd_update();
+  }
+}
+
+/**
+ * G5: Cubic B-spline
+ */
+inline void gcode_G5() {
+  if (!Stopped) {
+    get_cubic_coordinates();
+    prepare_cubic_move();
   }
 }
 
@@ -4722,6 +4734,13 @@ void process_commands() {
       gcode_G4();
       break;
 
+    // G5
+    #ifndef SCARA
+      case 5: // G5  - Cubic B_spline
+        gcode_G5();
+        break;
+    #endif
+
     #ifdef FWRETRACT
 
       case 10: // G10: retract
@@ -5238,6 +5257,49 @@ void get_arc_coordinates()
    }
 }
 
+/*
+ * Parameters interpreted according to:
+ * http://linuxcnc.org/docs/2.6/html/gcode/gcode.html#sec:G5-Cubic-Spline
+ * However I, J omission is not supported at this point; all
+ * parameters can be omitted and default to zero.
+ */
+void get_cubic_coordinates()
+{
+#ifdef SF_ARC_FIX
+   bool relative_mode_backup = relative_mode;
+   relative_mode = true;
+#endif
+   get_coordinates();
+#ifdef SF_ARC_FIX
+   relative_mode=relative_mode_backup;
+#endif
+
+   if(code_seen('I')) {
+     offset[0] = code_value();
+   }
+   else {
+     offset[0] = 0.0;
+   }
+   if(code_seen('J')) {
+     offset[1] = code_value();
+   }
+   else {
+     offset[1] = 0.0;
+   }
+   if(code_seen('P')) {
+     offset[2] = code_value();
+   }
+   else {
+     offset[2] = 0.0;
+   }
+   if(code_seen('Q')) {
+     offset[3] = code_value();
+   }
+   else {
+     offset[3] = 0.0;
+   }
+}
+
 void clamp_to_software_endstops(float target[3])
 {
   if (min_software_endstops) {
@@ -5563,6 +5625,18 @@ void prepare_arc_move(char isclockwise) {
 
   // Trace the arc
   mc_arc(current_position, destination, offset, X_AXIS, Y_AXIS, Z_AXIS, feedrate*feedmultiply/60/100.0, r, isclockwise, active_extruder);
+
+  // As far as the parser is concerned, the position is now == target. In reality the
+  // motion control system might still be processing the action and the real tool position
+  // in any intermediate location.
+  for(int8_t i=0; i < NUM_AXIS; i++) {
+    current_position[i] = destination[i];
+  }
+  previous_millis_cmd = millis();
+}
+
+void prepare_cubic_move() {
+  mc_cubic(current_position, destination, offset, X_AXIS, Y_AXIS, Z_AXIS, feedrate*feedmultiply/60/100.0, active_extruder);
 
   // As far as the parser is concerned, the position is now == target. In reality the
   // motion control system might still be processing the action and the real tool position

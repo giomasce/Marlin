@@ -28,5 +28,7 @@
 // for vector transformation direction.
 void mc_arc(float *position, float *target, float *offset, unsigned char axis_0, unsigned char axis_1,
   unsigned char axis_linear, float feed_rate, float radius, unsigned char isclockwise, uint8_t extruder);
-  
+void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uint8_t axis_1,
+              uint8_t axis_linear, float feed_rate, uint8_t extruder);
+
 #endif

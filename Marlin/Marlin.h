@@ -215,6 +215,7 @@ bool enquecommand(const char *cmd); //put a single ASCII command at the end of t
 void enquecommands_P(const char *cmd); //put one or many ASCII commands at the end of the current buffer, read from flash
 
 void prepare_arc_move(char isclockwise);
+void prepare_cubic_move();
 void clamp_to_software_endstops(float target[3]);
 
 void refresh_cmd_timeout(void);

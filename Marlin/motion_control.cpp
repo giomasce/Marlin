@@ -4,6 +4,7 @@
 
   Copyright (c) 2009-2011 Simen Svale Skogsrud
   Copyright (c) 2011 Sungeun K. Jeon
+  Copyright (c) 2016 Giovanni Mascellani <g.mascellani@gmail.com>
   
   Grbl is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -143,3 +144,39 @@ void mc_arc(float *position, float *target, float *offset, uint8_t axis_0, uint8
   //   plan_set_acceleration_manager_enabled(acceleration_manager_was_enabled);
 }
 
+inline static float interp(float a, float b, float t) {
+  return (1.0 - t) * a + t * b;
+}
+
+inline static float eval_bezier(float a, float b, float c, float d, float t) {
+  float iab = interp(a, b, t);
+  float ibc = interp(b, c, t);
+  float icd = interp(c, d, t);
+  float iabc = interp(iab, ibc, t);
+  float ibcd = interp(ibc, icd, t);
+  float iabcd = interp(iabc, ibcd, t);
+  return iabcd;
+}
+
+void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uint8_t axis_1,
+  uint8_t axis_linear, float feed_rate, uint8_t extruder)
+{
+  float first0 = position[axis_0] + offset[0];
+  float first1 = position[axis_1] + offset[1];
+  float second0 = target[axis_0] + offset[2];
+  float second1 = target[axis_1] + offset[3];
+
+  // FIXME: Number of segments is hardcoded so far
+  uint16_t segments = 10;
+
+  float tmp[4];
+  for (int i = 1; i <= segments; i++) {
+    float t = ((float) i) / segments;
+    tmp[axis_0] = eval_bezier(position[axis_0], first0, second0, target[axis_0], t);
+    tmp[axis_1] = eval_bezier(position[axis_1], first1, second1, target[axis_1], t);
+    tmp[axis_linear] = interp(position[axis_linear], target[axis_linear], t);
+    tmp[E_AXIS] = interp(position[E_AXIS], target[E_AXIS], t);
+    clamp_to_software_endstops(tmp);
+    plan_buffer_line(tmp[X_AXIS], tmp[Y_AXIS], tmp[Z_AXIS], tmp[E_AXIS], feed_rate, extruder);
+  }
+}
