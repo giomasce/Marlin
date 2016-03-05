@@ -158,25 +158,51 @@ inline static float eval_bezier(float a, float b, float c, float d, float t) {
   return iabcd;
 }
 
-void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uint8_t axis_1,
-  uint8_t axis_linear, float feed_rate, uint8_t extruder)
-{
+inline static float eval_bezier_derivative(float a, float b, float c, float d, float t) {
+  float iab = b - a;
+  float ibc = c - b;
+  float icd = d - c;
+  float iabc = interp(iab, ibc, t);
+  float ibcd = interp(ibc, icd, t);
+  float iabcd = interp(iabc, ibcd, t);
+  return iabcd;
+}
+
+#define APPROX_STEP_LEN 1.0
+
+void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uint8_t axis_1, uint8_t axis_linear, float feed_rate, uint8_t extruder) {
   float first0 = position[axis_0] + offset[0];
   float first1 = position[axis_1] + offset[1];
   float second0 = target[axis_0] + offset[2];
   float second1 = target[axis_1] + offset[3];
-
-  // FIXME: Number of segments is hardcoded so far
-  uint16_t segments = 10;
+  float t = 0.0;
 
   float tmp[4];
-  for (int i = 1; i <= segments; i++) {
-    float t = ((float) i) / segments;
+  float der0, der1, der_len;
+  while (t < 1.0) {
+    // Fixed-amount increasing (stupid)
+    //t += 0.1;
+
+    // Increase depending on derivative (probably has problems when
+    // derivative becomes very small)
+    der0 = eval_bezier_derivative(position[axis_0], first0, second0, target[axis_0], t);
+    der1 = eval_bezier_derivative(position[axis_1], first1, second1, target[axis_1], t);
+    der_len = hypotf(der0, der1);
+    t += APPROX_STEP_LEN / der_len;
+
+    if (t > 1.0) {
+      t = 1.0;
+    }
+
+    // Compute and send new position
     tmp[axis_0] = eval_bezier(position[axis_0], first0, second0, target[axis_0], t);
     tmp[axis_1] = eval_bezier(position[axis_1], first1, second1, target[axis_1], t);
     tmp[axis_linear] = interp(position[axis_linear], target[axis_linear], t);
     tmp[E_AXIS] = interp(position[E_AXIS], target[E_AXIS], t);
     clamp_to_software_endstops(tmp);
+    // FIXME: probably wrong: t does not increase at the same speed
+    // for XY and the other axes; what is the actual interface of
+    // plan_buffer_line?
     plan_buffer_line(tmp[X_AXIS], tmp[Y_AXIS], tmp[Z_AXIS], tmp[E_AXIS], feed_rate, extruder);
   }
 }
