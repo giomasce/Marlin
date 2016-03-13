@@ -144,6 +144,10 @@ void mc_arc(float *position, float *target, float *offset, uint8_t axis_0, uint8
   //   plan_set_acceleration_manager_enabled(acceleration_manager_was_enabled);
 }
 
+#define MIN_STEP 0.002
+#define MAX_STEP 0.1
+#define SIGMA 0.1
+
 inline static float interp(float a, float b, float t) {
   return (1.0 - t) * a + t * b;
 }
@@ -158,18 +162,17 @@ inline static float eval_bezier(float a, float b, float c, float d, float t) {
   return iabcd;
 }
 
-inline static float eval_bezier_derivative(float a, float b, float c, float d, float t) {
-  float iab = b - a;
-  float ibc = c - b;
-  float icd = d - c;
-  float iabc = interp(iab, ibc, t);
-  float ibcd = interp(ibc, icd, t);
-  float iabcd = interp(iabc, ibcd, t);
-  return iabcd;
+// We approximate Euclidean distance with the sum of the coordinates
+// offset (so-called "norm 1"), which is quicker to compute
+inline static float dist1(float x1, float y1, float x2, float y2) {
+  return fabs(x1 - x2) + fabs(y1 - y2);
 }
 
-#define APPROX_STEP_LEN 1.0
-
+/* The algorithm for computing the step is loosely based on the one in
+   Kig (see
+   https://sources.debian.net/src/kig/4:15.08.3-1/misc/kigpainter.cpp/#L759);
+   however, we do not use the stack
+ */
 void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uint8_t axis_1, uint8_t axis_linear, float feed_rate, uint8_t extruder) {
   float first0 = position[axis_0] + offset[0];
   float first1 = position[axis_1] + offset[1];
@@ -178,31 +181,78 @@ void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uin
   float t = 0.0;
 
   float tmp[4];
-  float der0, der1, der_len;
+  tmp[axis_0] = position[axis_0];
+  tmp[axis_1] = position[axis_1];
+  float step = MAX_STEP;
   while (t < 1.0) {
-    // Fixed-amount increasing (stupid)
-    //t += 0.1;
-
-    // Increase depending on derivative (probably has problems when
-    // derivative becomes very small)
-    der0 = eval_bezier_derivative(position[axis_0], first0, second0, target[axis_0], t);
-    der1 = eval_bezier_derivative(position[axis_1], first1, second1, target[axis_1], t);
-    der_len = hypotf(der0, der1);
-    t += APPROX_STEP_LEN / der_len;
-
-    if (t > 1.0) {
-      t = 1.0;
+    // First try to reduce the step in order to make it sufficiently
+    // close to a linear interpolation
+    bool did_reduce = false;
+    float new_t = t + step;
+    if (new_t > 1.0) {
+      new_t = 1.0;
     }
+    float new_pos0 = eval_bezier(position[axis_0], first0, second0, target[axis_0], new_t);
+    float new_pos1 = eval_bezier(position[axis_1], first1, second1, target[axis_1], new_t);
+    while (true) {
+      if (new_t - t < MIN_STEP) {
+        break;
+      }
+      float candidate_t = 0.5 * (t + new_t);
+      float candidate_pos0 = eval_bezier(position[axis_0], first0, second0, target[axis_0], candidate_t);
+      float candidate_pos1 = eval_bezier(position[axis_1], first1, second1, target[axis_1], candidate_t);
+      float interp_pos0 = 0.5 * (tmp[axis_0] + new_pos0);
+      float interp_pos1 = 0.5 * (tmp[axis_1] + new_pos1);
+      if (dist1(candidate_pos0, candidate_pos1, interp_pos0, interp_pos1) > SIGMA) {
+        new_t = candidate_t;
+        new_pos0 = candidate_pos0;
+        new_pos1 = candidate_pos1;
+        did_reduce = true;
+      } else {
+        break;
+      }
+    }
+
+    // If we did not reduce the step, maybe we should enlarge it
+    if (!did_reduce) {
+      while (true) {
+        if (new_t - t > MAX_STEP) {
+          break;
+        }
+        float candidate_t = t + 2.0 * (new_t - t);
+        if (candidate_t > 1.0) {
+          break;
+        }
+        float candidate_pos0 = eval_bezier(position[axis_0], first0, second0, target[axis_0], candidate_t);
+        float candidate_pos1 = eval_bezier(position[axis_1], first1, second1, target[axis_1], candidate_t);
+        float interp_pos0 = 0.5 * (tmp[axis_0] + candidate_pos0);
+        float interp_pos1 = 0.5 * (tmp[axis_1] + candidate_pos1);
+        if (dist1(new_pos0, new_pos1, interp_pos0, interp_pos1) > SIGMA) {
+          break;
+        } else {
+          new_t = candidate_t;
+          new_pos0 = candidate_pos0;
+          new_pos1 = candidate_pos1;
+        }
+      }
+    }
+
+    // Check some postcondition
+    /*assert(new_t <= 1.0);
+    assert(new_t - t >= MIN_STEP / 2.0);
+    assert(new_t - t <= MAX_STEP * 2.0);*/
+
+    step = new_t - t;
+    t = new_t;
 
     // Compute and send new position
     tmp[axis_0] = eval_bezier(position[axis_0], first0, second0, target[axis_0], t);
     tmp[axis_1] = eval_bezier(position[axis_1], first1, second1, target[axis_1], t);
+    // The following two are probably wrong, since the parameter t is
+    // not linear in the distance
     tmp[axis_linear] = interp(position[axis_linear], target[axis_linear], t);
     tmp[E_AXIS] = interp(position[E_AXIS], target[E_AXIS], t);
     clamp_to_software_endstops(tmp);
-    // FIXME: probably wrong: t does not increase at the same speed
-    // for XY and the other axes; what is the actual interface of
-    // plan_buffer_line?
     plan_buffer_line(tmp[X_AXIS], tmp[Y_AXIS], tmp[Z_AXIS], tmp[E_AXIS], feed_rate, extruder);
   }
 }
