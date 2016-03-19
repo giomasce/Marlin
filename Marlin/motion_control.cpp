@@ -144,14 +144,22 @@ void mc_arc(float *position, float *target, float *offset, uint8_t axis_0, uint8
   //   plan_set_acceleration_manager_enabled(acceleration_manager_was_enabled);
 }
 
+// See the meaning in the documentation of mc_cubic().
 #define MIN_STEP 0.002
 #define MAX_STEP 0.1
 #define SIGMA 0.1
 
+/* Compute the linear interpolation between to real numbers.
+*/
 inline static float interp(float a, float b, float t) {
   return (1.0 - t) * a + t * b;
 }
 
+/* Compute a Bézier curve using the De Casteljau's algorithm (see
+   https://en.wikipedia.org/wiki/De_Casteljau%27s_algorithm), which is
+   easy to code and has good numerical stability (very important,
+   since Arudino works with limited precision real numbers).
+ */
 inline static float eval_bezier(float a, float b, float c, float d, float t) {
   float iab = interp(a, b, t);
   float ibc = interp(b, c, t);
@@ -162,8 +170,9 @@ inline static float eval_bezier(float a, float b, float c, float d, float t) {
   return iabcd;
 }
 
-// We approximate Euclidean distance with the sum of the coordinates
-// offset (so-called "norm 1"), which is quicker to compute
+/* We approximate Euclidean distance with the sum of the coordinates
+   offset (so-called "norm 1"), which is quicker to compute.
+ */
 inline static float dist1(float x1, float y1, float x2, float y2) {
   return fabs(x1 - x2) + fabs(y1 - y2);
 }
@@ -171,9 +180,44 @@ inline static float dist1(float x1, float y1, float x2, float y2) {
 /* The algorithm for computing the step is loosely based on the one in
    Kig (see
    https://sources.debian.net/src/kig/4:15.08.3-1/misc/kigpainter.cpp/#L759);
-   however, we do not use the stack
+   however, we do not use the stack.
+
+   The algorithm goes as it follows: the parameters t runs from 0.0 to
+   1.0 describing the curve, which is evaluated by eval_bezier(). At
+   each iteration we have to choose a step, i.e., the increment of the
+   t variable. By default the step of the previous iteration is taken,
+   and then it is enlarged or reduced depending on how straight the
+   curve locally is. The step is always clamped between MIN_STEP/2 and
+   2*MAX_STEP. MAX_STEP is taken at the first iteration.
+
+   For some t, the step value is considered acceptable if the curve in
+   the interval [t, t+step] is sufficiently straight, i.e.,
+   sufficiently close to linear interpolation. In practice the
+   following test is performed: the distance between eval_bezier(...,
+   t+step/2) is evaluated and compared with 0.5*(eval_bezier(...,
+   t)+eval_bezier(..., t+step)). If it is smaller than SIGMA, then the
+   step value is considered acceptable, otherwise it is not. The code
+   seeks to find the larger step value which is considered acceptable.
+
+   At every iteration the recorded step value is considered and then
+   iteratively halved until it becomes acceptable. If it was already
+   acceptable in the beginning (i.e., no halving were done), then
+   maybe it was necessary to enlarge it; then it is iteratively
+   doubled while it remains acceptable. The last acceptable value
+   found is taken, provided that it is between MIN_STEP and MAX_STEP
+   and does not bring t over 1.0.
+
+   Caveat: this algorithm is not perfect, since it can happen that a
+   step is considered acceptable even when the curve is not linear at
+   all in the interval [t, t+step] (but its mid point coincides "by
+   chance" with the midpoint according to the parametrization). This
+   kind of glitches can be eliminated with proper first derivative
+   estimates; however, given the improbability of such configurations,
+   the mitigation offered by MIN_STEP and the small computational
+   power available on Arduino, I think it is not wise to implement it.
  */
 void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uint8_t axis_1, uint8_t axis_linear, float feed_rate, uint8_t extruder) {
+  // Absolute first and second control points are recovered.
   float first0 = position[axis_0] + offset[0];
   float first1 = position[axis_1] + offset[1];
   float second0 = target[axis_0] + offset[2];
@@ -186,7 +230,7 @@ void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uin
   float step = MAX_STEP;
   while (t < 1.0) {
     // First try to reduce the step in order to make it sufficiently
-    // close to a linear interpolation
+    // close to a linear interpolation.
     bool did_reduce = false;
     float new_t = t + step;
     if (new_t > 1.0) {
@@ -213,7 +257,7 @@ void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uin
       }
     }
 
-    // If we did not reduce the step, maybe we should enlarge it
+    // If we did not reduce the step, maybe we should enlarge it.
     if (!did_reduce) {
       while (true) {
         if (new_t - t > MAX_STEP) {
@@ -237,10 +281,12 @@ void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uin
       }
     }
 
-    // Check some postcondition
-    /*assert(new_t <= 1.0);
-    assert(new_t - t >= MIN_STEP / 2.0);
-    assert(new_t - t <= MAX_STEP * 2.0);*/
+    // Check some postcondition; they are disabled in the actual
+    // Marlin build, but if you test the same code on a computer you
+    // may want to check they are respect.
+    //assert(new_t <= 1.0);
+    //assert(new_t - t >= MIN_STEP / 2.0);
+    //assert(new_t - t <= MAX_STEP * 2.0);
 
     step = new_t - t;
     t = new_t;
@@ -248,8 +294,8 @@ void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uin
     // Compute and send new position
     tmp[axis_0] = eval_bezier(position[axis_0], first0, second0, target[axis_0], t);
     tmp[axis_1] = eval_bezier(position[axis_1], first1, second1, target[axis_1], t);
-    // The following two are probably wrong, since the parameter t is
-    // not linear in the distance
+    // FIXME. The following two are probably wrong, since the
+    // parameter t is not linear in the distance.
     tmp[axis_linear] = interp(position[axis_linear], target[axis_linear], t);
     tmp[E_AXIS] = interp(position[E_AXIS], target[E_AXIS], t);
     clamp_to_software_endstops(tmp);
