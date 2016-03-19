@@ -292,10 +292,10 @@ void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uin
     t = new_t;
 
     // Compute and send new position
-    tmp[axis_0] = eval_bezier(position[axis_0], first0, second0, target[axis_0], t);
-    tmp[axis_1] = eval_bezier(position[axis_1], first1, second1, target[axis_1], t);
-    // FIXME. The following two are probably wrong, since the
-    // parameter t is not linear in the distance.
+    tmp[axis_0] = new_pos0;
+    tmp[axis_1] = new_pos1;
+    // FIXME. The following two are wrong, since the parameter t is
+    // not linear in the distance.
     tmp[axis_linear] = interp(position[axis_linear], target[axis_linear], t);
     tmp[E_AXIS] = interp(position[E_AXIS], target[E_AXIS], t);
     clamp_to_software_endstops(tmp);
