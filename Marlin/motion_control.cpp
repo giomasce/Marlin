@@ -264,7 +264,7 @@ void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uin
           break;
         }
         float candidate_t = t + 2.0 * (new_t - t);
-        if (candidate_t > 1.0) {
+        if (candidate_t >= 1.0) {
           break;
         }
         float candidate_pos0 = eval_bezier(position[axis_0], first0, second0, target[axis_0], candidate_t);
@@ -284,9 +284,11 @@ void mc_cubic(float *position, float *target, float *offset, uint8_t axis_0, uin
     // Check some postcondition; they are disabled in the actual
     // Marlin build, but if you test the same code on a computer you
     // may want to check they are respect.
-    //assert(new_t <= 1.0);
-    //assert(new_t - t >= MIN_STEP / 2.0);
-    //assert(new_t - t <= MAX_STEP * 2.0);
+    /*assert(new_t <= 1.0);
+    if (new_t < 1.0) {
+      assert(new_t - t >= MIN_STEP / 2.0);
+      assert(new_t - t <= MAX_STEP * 2.0);
+    }*/
 
     step = new_t - t;
     t = new_t;
